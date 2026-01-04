@@ -14,6 +14,12 @@
 
   <!-- JavaScript لعدم ظهور project-dfir.html في الرابط -->
   <script type="text/javascript">
+    // منع ظهور index.html في الرابط
+    if (window.location.pathname === "/index.html") {
+      window.location.replace("/");  // إعادة توجيه المستخدم إلى الرابط بدون index.html
+    }
+
+    // منع ظهور project-dfir.html في الرابط
     if (window.location.pathname === "/project-dfir.html") {
       window.location.replace("/project-dfir");  // إعادة توجيه المستخدم إلى الرابط بدون project-dfir.html
     }
