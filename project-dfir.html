@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DFIR Case Study — Confirming Kerberoasting Activity</title>
+  <meta name="description" content="DFIR write-up: Confirming Kerberoasting activity using DC security logs (4769) and endpoint triage (PowerShell + Prefetch)." />
+
+  <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- إضافة مكتبة GLightbox للتعامل مع تكبير الصور -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/glightbox/dist/css/glightbox.min.css" />
+  <script src="https://cdn.jsdelivr.net/gh/mcstudios/glightbox/dist/js/glightbox.min.js"></script>
+
+  <style>
+    :root{
+      --bg:#f6f7fb;
+      --surface:#ffffff;
+      --surface-2:#f1f4ff;
+      --text:#0f172a;
+      --muted:#475569;
+      --border:rgba(15,23,42,.10);
+      --shadow:0 10px 28px rgba(2,6,23,.08);
+      --shadow-soft:0 6px 16px rgba(2,6,23,.06);
+
+      --primary:#2563eb;
+      --accent:#f59e0b;
+
+      --radius:16px;
+      --max:1080px;
+
+      --mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;
+      --sans:'Open Sans',system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+      --head:'Open Sans',system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+    }
+
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family:var(--sans);
+      color:var(--text);
+      line-height:1.75;
+      font-size:14px;
+      font-weight:500; /* زيادة الوزن للنصوص العامة */
+      background:
+        radial-gradient(1200px 600px at 20% -10%, rgba(37,99,235,.18), transparent 55%),
+        radial-gradient(1000px 520px at 90% 0%, rgba(245,158,11,.12), transparent 55%),
+        var(--bg);
+    }
+    a{color:var(--primary);text-decoration:none;font-weight:600}
+    a:hover{color:var(--accent);text-decoration:underline}
+
+    .wrap{width:min(var(--max),100% - 40px);margin:0 auto}
+
+    /* Top */
+    .topbar{
+      position:sticky;top:0;z-index:50;
+      backdrop-filter:blur(10px);
+      background:color-mix(in srgb, var(--surface), transparent 18%);
+      border-bottom:1px solid var(--border);
+    }
+    .topbar .inner{
+      display:flex;align-items:center;justify-content:space-between;
+      gap:12px;padding:12px 0;
+    }
+
+    /* left cluster (Back + Brand) */
+    .left{
+      display:flex;
+      align-items:center;
+      gap:12px;
+      min-width:0;
+    }
+
+    /* Back to home (arrow only) */
+    .back-home{
+      width:40px;height:40px;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      border-radius:999px;
+      border:1px solid var(--border);
+      background:color-mix(in srgb, var(--surface), transparent 10%);
+      box-shadow:var(--shadow-soft);
+      color:var(--muted);
+      transition:transform .14s ease, background .14s ease, color .14s ease, box-shadow .14s ease;
+      text-decoration:none;
+      flex:0 0 auto;
+    }
+    .back-home:hover{
+      background:var(--surface-2);
+      color:var(--primary);
+      transform:translateY(-1px);
+      box-shadow:0 10px 22px rgba(2,6,23,.10);
+      text-decoration:none;
+    }
+    .back-home:active{
+      transform:translateY(0px) scale(.98);
+    }
+    .back-home svg{
+      width:18px;height:18px;
+      display:block;
+    }
+
+    .brand{display:flex;align-items:center;gap:12px;min-width:0}
+    .logo{
+      width:38px;height:38px;border-radius:12px;
+      background:linear-gradient(135deg,var(--primary),var(--accent));
+      box-shadow:var(--shadow-soft);
+      flex:0 0 auto;
+    }
+    .brand .t{
+      min-width:0;
+    }
+    .brand h1{
+      margin:0;
+      font-family:var(--head);
+      font-size:18px;font-weight:800;line-height:1.2; /* زيادة كبيرة في الوزن */
+      white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    }
+    .brand p{
+      margin:2px 0 0;
+      color:var(--muted);
+      font-size:14px;
+      font-weight:600; /* زيادة الوزن */
+      white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    }
+
+    /* Hero */
+    header.hero{padding:28px 0 14px}
+    .hero-card{
+      position:relative;
+      border:1px solid var(--border);
+      border-radius:calc(var(--radius) + 4px);
+      background:linear-gradient(180deg, var(--surface), color-mix(in srgb, var(--surface), transparent 6%));
+      box-shadow:var(--shadow);
+      padding:22px;
+      overflow:hidden;
+    }
+    .hero-card:before{
+      content:"";
+      position:absolute;
+      inset:-60px -80px auto auto;
+      width:220px;height:220px;
+      background:
+        radial-gradient(circle at 30% 30%, rgba(37,99,235,.30), transparent 60%),
+        radial-gradient(circle at 70% 70%, rgba(245,158,11,.22), transparent 60%);
+      transform:rotate(12deg);
+      pointer-events:none;
+    }
+    .hero h2{
+      margin:0 0 8px;
+      font-family:'Open Sans', sans-serif;
+      font-size:clamp(26px,3.4vw,40px);
+      font-weight:800; /* زيادة كبيرة في الوزن */
+      line-height:1.15;
+      letter-spacing:-.02em;
+    }
+    .hero .subtitle{
+      margin:0;
+      color:var(--muted);
+      font-size:16px;
+      font-weight:600; /* زيادة الوزن */
+      max-width:85ch;
+    }
+    .meta-row{
+      display:flex;flex-wrap:wrap;gap:10px;
+      margin-top:12px;
+    }
+    .chip{
+      border:1px solid var(--border);
+      background:var(--surface-2);
+      padding:8px 12px;
+      border-radius:999px;
+      font-size:13px;
+      font-weight:700; /* زيادة كبيرة في الوزن */
+      color:var(--muted);
+      display:inline-flex;align-items:center;gap:8px;
+    }
+    .chip strong{font-weight:800}
+    .dot{width:8px;height:8px;border-radius:999px;background:var(--primary);display:inline-block}
+
+    /* Content */
+    main{padding:12px 0 60px}
+    .card{
+      border:1px solid var(--border);
+      border-radius:var(--radius);
+      background:var(--surface);
+      box-shadow:var(--shadow-soft);
+      padding:20px;
+      margin:14px 0;
+      overflow:hidden;
+    }
+    
+    /* تحسين تخطيط الخطوات */
+    .step-head{
+      display:flex;
+      flex-direction:column;
+      gap:4px;
+      margin-bottom:12px;
+    }
+    
+    .step-header{
+      display:flex;
+      align-items:center;
+      gap:12px;
+      width:100%;
+    }
+    
+    .badge{
+      flex: 0 0 auto;
+      border:1px solid var(--border);
+      background:var(--surface-2);
+      color:var(--primary);
+      font-weight:800; /* زيادة كبيرة في الوزن */
+      font-size:13px;
+      padding:6px 10px;
+      border-radius:999px;
+      font-family:'Open Sans', sans-serif;
+      line-height:1;
+      height:fit-content;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      min-width:60px;
+    }
+    
+    .step-title{
+      margin:0;
+      font-family:'Open Sans', sans-serif;
+      font-size:20px; /* زيادة حجم الخط */
+      font-weight:800; /* زيادة كبيرة في الوزن */
+      line-height:1.25;
+      letter-spacing:-.01em;
+      flex:1;
+    }
+    
+    .step-sub{
+      margin:0;
+      color:var(--muted);
+      font-size:15px;
+      font-weight:600; /* زيادة الوزن */
+      max-width:100%;
+      line-height:1.5;
+      padding-left: 0;
+      margin-top: 4px;
+    }
+    
+    p{
+      margin:10px 0;
+      font-size:15px; /* زيادة حجم الخط */
+      font-weight:500;
+      font-family:'Open Sans', sans-serif;
+      line-height:1.6;
+    }
+    
+    ul{margin:10px 0 0 20px; padding:0}
+    
+    li{
+      margin:6px 0;
+      font-size:15px; /* زيادة حجم الخط */
+      font-weight:500;
+      font-family:'Open Sans', sans-serif;
+      line-height:1.6;
+    }
+    
+    li strong{font-weight:800}
+
+    code{
+      font-family:var(--mono);
+      font-size:13px;
+      font-weight:700; /* زيادة الوزن */
+      background:rgba(37,99,235,.08);
+      border:1px solid var(--border);
+      padding:2px 8px;
+      border-radius:10px;
+    }
+
+    figure.shot{
+      margin:14px 0 0;
+      border:1px solid var(--border);
+      border-radius:0; /* حواف حادة */
+      overflow:hidden;
+      background:var(--surface-2);
+      box-shadow:var(--shadow-soft);
+    }
+    
+    figure.shot a.glightbox {
+      display: block;
+    }
+    
+    figure.shot img{
+      width:100%;
+      height:auto;
+      display:block;
+      cursor: zoom-in;
+    }
+
+    .kv{
+      display:grid;
+      grid-template-columns:repeat(2,minmax(0,1fr));
+      gap:12px;
+      margin-top:14px;
+    }
+    
+    .kv .row{
+      border:1px solid var(--border);
+      background:var(--surface-2);
+      border-radius:14px;
+      padding:12px;
+      font-size:14px;
+      font-weight:600; /* زيادة الوزن */
+      line-height:1.5;
+    }
+    
+    .row strong{
+      color:var(--primary);
+      font-weight:800; /* زيادة كبيرة في الوزن */
+    }
+
+    @media (max-width: 820px){
+      .kv{grid-template-columns:1fr}
+      .step-header{
+        flex-direction: row;
+        align-items: center;
+      }
+    }
+    
+    /* تخصيص إعدادات GLightbox */
+    .gslide img {
+      background-color: var(--surface);
+    }
+    
+    /* إخفاء التسميات التوضيحية في GLightbox */
+    .glightbox-clean .gslide-description {
+      display: none !important;
+    }
+    
+    .glightbox-clean .gclose, .glightbox-clean .gnext, .glightbox-clean .gprev {
+      background-color: rgba(15, 23, 42, 0.7);
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+    }
+    
+    .glightbox-clean .gclose svg, .glightbox-clean .gnext svg, .glightbox-clean .gprev svg {
+      width: 18px;
+      height: 18px;
+    }
+  </style>
+</head>
+
+<body>
+  <!-- Topbar -->
+  <div class="topbar">
+    <div class="wrap">
+      <div class="inner">
+
+        <div class="left">
+          <!-- غيّر index.html حسب اسم صفحة الهوم عندك -->
+          <a class="back-home" href="index.html" aria-label="Back to Home" title="Back to Home">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M15 18l-6-6 6-6"
+                    stroke="currentColor"
+                    stroke-width="2.4"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"/>
+            </svg>
+          </a>
+
+          <div class="brand">
+            <div class="logo" aria-hidden="true"></div>
+            <div class="t">
+              <h1>DFIR Investigation</h1>
+              <p>Kerberoasting confirmation</p>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- Hero -->
+  <header class="hero">
+    <div class="wrap">
+      <div class="hero-card">
+        <h2>Confirming Kerberoasting Activity</h2>
+        <p class="subtitle">DC Security logs + Endpoint artifacts (PowerShell , Prefetch).</p>
+
+        <div class="meta-row" role="list">
+          <div class="chip" role="listitem"><span class="dot"></span><strong>Index:</strong>&nbsp;htp-campfire</div>
+          <div class="chip" role="listitem"><span class="dot"></span><strong>Events:</strong>&nbsp;4769 / 4104</div>
+          <div class="chip" role="listitem"><span class="dot"></span><strong>Tools:</strong>&nbsp;Splunk / PECmd / Timeline Explorer</div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main -->
+  <main>
+    <div class="wrap">
+
+      <!-- Context -->
+      <section class="card">
+        <div class="step-head">
+          <div class="step-header">
+            <span class="badge">Context</span>
+            <h3 class="step-title">Scenario</h3>
+          </div>
+          <p class="step-sub">A user (Alonzo) reported suspicious files, and the SOC suspected a Kerberoasting attempt. The objective is to confirm the activity using DC logs and endpoint triage artifacts.</p>
+        </div>
+      </section>
+
+      <!-- Step 1 -->
+      <section class="card">
+        <div class="step-head">
+          <div class="step-header">
+            <span class="badge">Step 01</span>
+            <h3 class="step-title">Review available logs in Splunk</h3>
+          </div>
+          <p class="step-sub">I started by confirming the dataset is correctly ingested and searchable in Splunk (index: <code>htp-campfire</code>), This ensures we can pivot reliably into the relevant evidence.</p>
+        </div>
+        <figure class="shot">
+          <a href="assets/images/01-splunk-index.png" class="glightbox">
+            <img src="assets/images/01-splunk-index.png" alt="Splunk Index" loading="lazy" decoding="async">
+          </a>
+        </figure>
+      </section>
+
+      <!-- Step 2 -->
+      <section class="card">
+        <div class="step-head">
+          <div class="step-header">
+            <span class="badge">Step 02</span>
+            <h3 class="step-title">Filter Kerberos TGS requests (Event ID 4769)</h3>
+          </div>
+          <p class="step-sub">Kerberoasting is commonly detected via DC Security Event ID 4769 (TGS/service ticket requested). I filtered for EventCode=4769 to identify service ticket requests that could indicate roasting activity.</p>
+        </div>
+        <figure class="shot">
+          <a href="assets/images/02-event-4769-filter.png" class="glightbox">
+            <img src="assets/images/02-event-4769-filter.png" alt="Event Filter" loading="lazy" decoding="async">
+          </a>
+        </figure>
+      </section>
+
+      <!-- Step 3 -->
+      <section class="card">
+        <div class="step-head">
+          <div class="step-header">
+            <span class="badge">Step 03</span>
+            <h3 class="step-title">Identify host/computer accounts (ending with <code>$</code>)</h3>
+          </div>
+          <p class="step-sub">While reviewing results, the Service Name ended with $, which commonly indicates a computer account in Active Directory. This is important because it is usually not the best Kerberoasting target.</p>
+        </div>
+        <figure class="shot">
+          <a href="assets/images/03-event-4769-computer-account.png" class="glightbox">
+            <img src="assets/images/03-event-4769-computer-account.png" alt="Event 4769 - Computer Account" loading="lazy" decoding="async">
+          </a>
+        </figure>
+      </section>
+
+      <!-- Step 4 -->
+      <section class="card">
+        <div class="step-head">
+          <div class="step-header">
+            <span class="badge">Step 04</span>
+            <h3 class="step-title">Why host SPNs are not ideal targets</h3>
+          </div>
+          <p class="step-sub">Host/computer accounts generally have strong, frequently rotated passwords, making them far less practical for Kerberoasting compared to weak service accounts.</p>
+        </div>
+        <figure class="shot">
+          <a href="assets/images/04-crowdstrike-host-spn-not-vulnerable.png" class="glightbox">
+            <img src="assets/images/04-crowdstrike-host-spn-not-vulnerable.png" alt="Crowdstrike - Host SPN" loading="lazy" decoding="async">
+          </a>
+        </figure>
+      </section>
+
+      <!-- Step 5 -->
+      <section class="card">
+        <div class="step-head">
+          <div class="step-header">
+            <span class="badge">Step 05</span>
+            <h3 class="step-title">Exclude host accounts</h3>
+          </div>
+          <p class="step-sub">Focus on service targets (exclude Service Names ending with <code>$</code>).</p>
+        </div>
+        <figure class="shot">
+          <a href="assets/images/05-filter-4769-exclude-host-accounts.png" class="glightbox">
+            <img src="assets/images/05-filter-4769-exclude-host-accounts.png" alt="Filter 4769 Exclude Hosts" loading="lazy" decoding="async">
+          </a>
+        </figure>
+      </section>
+
+      <!-- Step 6 -->
+      <section class="card">
+        <div class="step-head">
+          <div class="step-header">
+            <span class="badge">Step 06</span>
+            <h3 class="step-title">Extract service name, client IP, and encryption type</h3>
+          </div>
+          <p class="step-sub">After filtering, I opened the most relevant event and extracted key indicators:</p>
+        </div>
+        <ul>
+          <li><strong>Targeted Service Name:</strong> <code>MSSQLService</code></li>
+          <li><strong>Client Address (Workstation IP):</strong> <code>172.17.79.129</code></li>
+          <li><strong>Ticket Encryption Type:</strong> <code>0x17</code> (RC4-HMAC)</li>
+        </ul>
+        <p class="muted">
+          RC4 (<code>0x17</code>) is legacy/weaker compared to AES (<code>0x11</code>/<code>0x12</code>) and is commonly observed in Kerberoasting investigations.
+        </p>
+        <figure class="shot">
+          <a href="assets/images/06-4769-rc4-etype-0x17.png" class="glightbox">
+            <img src="assets/images/06-4769-rc4-etype-0x17.png" alt="4769 - RC4 Encryption" loading="lazy" decoding="async">
+          </a>
+        </figure>
+      </section>
+
+      <!-- Step 7 -->
+      <section class="card">
+        <div class="step-head">
+          <div class="step-header">
+            <span class="badge">Step 07</span>
+            <h3 class="step-title">Proof: <code>0x17</code> maps to RC4-HMAC</h3>
+          </div>
+          <p class="step-sub">Reference confirming encryption mapping.</p>
+        </div>
+        <figure class="shot">
+          <a href="assets/images/07-etype-0x17-rc4-proof.png" class="glightbox">
+            <img src="assets/images/07-etype-0x17-rc4-proof.png" alt="RC4 Encryption Proof" loading="lazy" decoding="async">
+          </a>
+        </figure>
+      </section>
+
+      <!-- Step 8 -->
+      <section class="card">
+        <div class="step-head">
+          <div class="step-header">
+            <span class="badge">Step 08</span>
+            <h3 class="step-title">Pivot to endpoint PowerShell logs (Event ID 4104)</h3>
+          </div>
+          <p>
+            With the workstation identified, I moved to endpoint triage. I searched PowerShell Operational logs for <code>4104</code>
+            (ScriptBlock logging), which often captures suspicious scripts and reconnaissance.
+          </p>
+        </div>
+        <figure class="shot">
+          <a href="assets/images/08-powershell-4104-filter.png" class="glightbox">
+            <img src="assets/images/08-powershell-4104-filter.png" alt="PowerShell Logs Filter" loading="lazy" decoding="async">
+          </a>
+        </figure>
+      </section>
+
+      <!-- Step 9 -->
+      <section class="card">
+        <div class="step-head">
+          <div class="step-header">
+            <span class="badge">Step 09</span>
+            <h3 class="step-title">Identify AD enumeration script: <code>powerview.ps1</code></h3>
+          </div>
+          <p>
+            The event details revealed <code>powerview.ps1</code>, a known AD enumeration tool often used to discover domain objects and
+            identify Kerberoastable accounts.
+          </p>
+        </div>
+        <figure class="shot">
+          <a href="assets/images/09-powerview-found.png" class="glightbox">
+            <img src="assets/images/09-powerview-found.png" alt="PowerView Script Found" loading="lazy" decoding="async">
+          </a>
+        </figure>
+      </section>
+
+      <!-- Step 10 -->
+      <section class="card">
+        <div class="step-head">
+          <div class="step-header">
+            <span class="badge">Step 10</span>
+            <h3 class="step-title">Validate PowerView's purpose (research/reference)</h3>
+          </div>
+          <p class="step-sub">I added a quick research reference so readers understand why PowerView is relevant in Kerberoasting chains.</p>
+        </div>
+        <figure class="shot">
+          <a href="assets/images/10-powerview-research.png" class="glightbox">
+            <img src="assets/images/10-powerview-research.png" alt="PowerView Research" loading="lazy" decoding="async">
+          </a>
+        </figure>
+      </section>
+
+      <!-- Step 11 -->
+      <section class="card">
+        <div class="step-head">
+          <div class="step-header">
+            <span class="badge">Step 11</span>
+            <h3 class="step-title">Prefetch investigation: parse Prefetch artifacts with PECmd</h3>
+          </div>
+          <p class="step-sub">Next, I analyzed Prefetch artifacts from the workstation to confirm program execution. I used PECmd to parse the Prefetch directory and output results into CSV files for timeline review.</p>
+        </div>
+        <figure class="shot">
+          <a href="assets/images/11-pecmd-prefetch-parse.png" class="glightbox">
+            <img src="assets/images/11-pecmd-prefetch-parse.png" alt="PECMD Prefetch Parse" loading="lazy" decoding="async">
+          </a>
+        </figure>
+      </section>
+
+      <!-- Step 12 -->
+      <section class="card">
+        <div class="step-head">
+          <div class="step-header">
+            <span class="badge">Step 12</span>
+            <h3 class="step-title">Confirm PECmd output files</h3>
+          </div>
+          <p class="step-sub">PECmd produced output CSV files (including a timeline CSV) which can be loaded into Timeline Explorer.</p>
+        </div>
+        <figure class="shot">
+          <a href="assets/images/12-pecmd-output-files.png" class="glightbox">
+            <img src="assets/images/12-pecmd-output-files.png" alt="PECMD Output Files" loading="lazy" decoding="async">
+          </a>
+        </figure>
+      </section>
+
+      <!-- Step 13 -->
+      <section class="card">
+        <div class="step-head">
+          <div class="step-header">
+            <span class="badge">Step 13</span>
+            <h3 class="step-title">Prefetch timeline confirms <code>Rubeus.exe</code> execution</h3>
+          </div>
+          <p>
+            Using Timeline Explorer on the PECmd timeline output, I identified execution of Rubeus.exe from the path:
+            <code>C:\Users\Alonzo.spire\Downloads\Rubeus.exe</code>
+            This ties the endpoint activity directly to Kerberoasting tooling.
+          </p>
+        </div>
+        <figure class="shot">
+          <a href="assets/images/13-timeline-explorer-rubeus.png" class="glightbox">
+            <img src="assets/images/13-timeline-explorer-rubeus.png" alt="Timeline Explorer - Rubeus" loading="lazy" decoding="async">
+          </a>
+        </figure>
+      </section>
+
+      <!-- Step 14 -->
+      <section class="card">
+        <div class="step-head">
+          <div class="step-header">
+            <span class="badge">Step 14</span>
+            <h3 class="step-title">Proof: Rubeus is used in Kerberoasting workflows</h3>
+          </div>
+          <p class="step-sub">Finally, I referenced CrowdStrike's Kerberoasting workflow which explicitly notes that tools like Rubeus are used to request Kerberos service tickets (TGS), supporting the interpretation of the observed activity.</p>
+        </div>
+        <figure class="shot">
+          <a href="assets/images/14-crowdstrike-rubeus-proof.png" class="glightbox">
+            <img src="assets/images/14-crowdstrike-rubeus-proof.png" alt="Crowdstrike Rubeus Proof" loading="lazy" decoding="async">
+          </a>
+        </figure>
+      </section>
+
+      <!-- Results -->
+      <section class="card">
+        <div class="step-head">
+          <div class="step-header">
+            <span class="badge">Results</span>
+            <h3 class="step-title">Findings Summary</h3>
+          </div>
+          <p class="step-sub">Concise indicators.</p>
+        </div>
+
+        <div class="kv">
+          <div class="row"><strong>Kerberoasting time (UTC):</strong> 2024-05-21 03:18:09 AM</div>
+          <div class="row"><strong>Service Name:</strong> MSSQLService</div>
+          <div class="row"><strong>Workstation IP:</strong> 172.17.79.129</div>
+          <div class="row"><strong>Script:</strong> powerview.ps1</div>
+          <div class="row"><strong>PowerView time (UTC):</strong> 2024-05-21 03:16:32 AM</div>
+          <div class="row"><strong>Tool:</strong> C:\Users\Alonzo.spire\Downloads\Rubeus.exe</div>
+          <div class="row"><strong>Rubeus time (UTC):</strong> 2024-05-21 03:18:08 AM</div>
+          <div class="row"><strong>EType:</strong> 0x17 (RC4-HMAC)</div>
+        </div>
+
+        <p style="margin-top:12px;color:var(--muted);font-size:13px;font-weight:600;font-family:'Open Sans', sans-serif;">
+          References:
+          <a href="https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/auditing/event-4769" target="_blank" rel="noreferrer">Microsoft Event 4769</a> ·
+          <a href="https://techcommunity.microsoft.com/blog/coreinfrastructureandsecurityblog/decrypting-the-selection-of-supported-kerberos-encryption-types/1628797" target="_blank" rel="noreferrer">Kerberos Encryption Types</a>
+        </p>
+      </section>
+
+    </div>
+  </main>
+
+  <!-- Script لتشغيل مكتبة تكبير الصور -->
+  <script>
+    // تهيئة GLightbox بعد تحميل الصفحة
+    document.addEventListener('DOMContentLoaded', function() {
+      const lightbox = GLightbox({
+        touchNavigation: true,
+        loop: true,
+        autoplayVideos: false,
+        moreText: '',
+        moreLength: 0,
+        closeButton: true,
+        zoomable: true,
+        draggable: true,
+        openEffect: 'zoom',
+        closeEffect: 'fade',
+        slideEffect: 'slide',
+        descPosition: false, // إخفاء النص بالكامل
+        width: '90%',
+        height: '90%'
+      });
+    });
+  </script>
+</body>
+</html>
